@@ -1,0 +1,26 @@
+{
+  "name": "ecommerce-microservices",
+  "version": "1.0.0",
+  "description": "E-commerce microservices with Docker",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "lint": "cd backend && npm run type-check",
+    "test": "make health",
+    "build": "make prod-build",
+    "dev": "make dev-up",
+    "prod": "make prod-up"
+  },
+  "devDependencies": {
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0"
+  },
+  "lint-staged": {
+    "backend/**/*.ts": [
+      "bash -c 'cd backend && npm run type-check'"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

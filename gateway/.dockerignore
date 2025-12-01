@@ -1,0 +1,51 @@
+# =============================================================================
+# Gateway .dockerignore
+# =============================================================================
+# Exclude files not needed in Docker build context
+# Results in faster builds and smaller images
+# =============================================================================
+
+# Dependencies - will be installed fresh in container
+node_modules
+npm-debug.log*
+
+# Version control
+.git
+.gitignore
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Test files - not needed in production
+tests
+**/*.test.js
+**/*.spec.js
+coverage
+.nyc_output
+
+# Documentation
+*.md
+docs
+
+# Environment files (sensitive data)
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (prevent recursive context)
+Dockerfile*
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore
+
+# Logs
+logs
+*.log

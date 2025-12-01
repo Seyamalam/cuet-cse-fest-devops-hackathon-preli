@@ -1,0 +1,41 @@
+# =============================================================================
+# Gateway Development Dockerfile
+# =============================================================================
+# Optimized for hot reloading with volume-mounted source code
+# Uses nodemon for automatic restart on file changes
+# =============================================================================
+
+FROM node:20-alpine
+
+# Add labels
+LABEL maintainer="hackathon-team"
+LABEL description="E-commerce API Gateway - Development"
+LABEL version="1.0.0-dev"
+
+# Set NODE_ENV
+ENV NODE_ENV=development
+
+# Install useful development tools
+RUN apk add --no-cache curl
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install ALL dependencies (including devDependencies like nodemon)
+RUN npm ci
+
+# Note: Source code will be volume-mounted, not copied
+# This enables hot reloading when files change
+
+# Expose the gateway port
+EXPOSE 5921
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5921/health || exit 1
+
+# Start with nodemon for hot reloading
+CMD ["npm", "run", "dev"]

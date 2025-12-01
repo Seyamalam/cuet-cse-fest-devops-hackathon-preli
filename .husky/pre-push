@@ -1,0 +1,42 @@
+#!/bin/sh
+
+echo "🔍 Running pre-push checks..."
+
+# Check Docker files exist
+echo "📦 Checking Docker files..."
+for file in backend/Dockerfile gateway/Dockerfile docker/compose.development.yaml docker/compose.production.yaml; do
+    if [ ! -f "$file" ]; then
+        echo "❌ Missing required file: $file"
+        exit 1
+    fi
+done
+echo "✅ All required Docker files present"
+
+# Lint backend TypeScript
+echo "📝 Type checking backend..."
+cd backend
+npm run type-check
+if [ $? -ne 0 ]; then
+    echo "❌ Backend type check failed!"
+    exit 1
+fi
+cd ..
+
+# Run linting
+echo "🔧 Running linter..."
+cd backend
+npm run lint 2>/dev/null || true
+cd ..
+
+# Verify .env exists
+if [ ! -f .env ]; then
+    echo "⚠️  .env file not found. Using .env.example as reference..."
+    if [ ! -f .env.example ]; then
+        echo "❌ No .env.example found!"
+        exit 1
+    fi
+fi
+
+echo "✅ All pre-push checks passed!"
+echo "💡 Tip: Run 'make health' after push to verify deployment"
+

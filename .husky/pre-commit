@@ -1,0 +1,14 @@
+#!/bin/sh
+
+echo "🔍 Running pre-commit checks..."
+
+# Type check backend TypeScript
+echo "📝 Type checking backend..."
+cd backend && npm run type-check
+if [ $? -ne 0 ]; then
+    echo "❌ TypeScript type check failed!"
+    exit 1
+fi
+cd ..
+
+echo "✅ All pre-commit checks passed!"

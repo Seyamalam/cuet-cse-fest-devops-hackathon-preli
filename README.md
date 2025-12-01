@@ -1,5 +1,7 @@
 # Hackathon Challenge
 
+> 📖 **For complete implementation details, see [SOLUTION.md](./SOLUTION.md)** - includes quick start guide, Docker optimization, security hardening, and all Makefile commands.
+
 Your challenge is to take this simple e-commerce backend and turn it into a fully containerized microservices setup using Docker and solid DevOps practices.
 
 ## Problem Statement
@@ -93,6 +95,29 @@ NODE_ENV=
 - Makefile CLI Commands for smooth dev and prod deploy experience (TRY TO COMPLETE THE COMMANDS COMMENTED IN THE Makefile)
 
 **ADD WHAT EVER BEST PRACTICES YOU KNOW**
+
+## Solution Documentation
+
+For detailed implementation documentation, best practices, and architecture decisions, see [SOLUTION.md](./SOLUTION.md).
+
+This includes:
+- Quick start guide
+- Docker optimization techniques
+- Security hardening measures
+- Health checks and service ordering
+- Data persistence strategy
+- Complete Makefile reference
+- CI/CD pipeline setup
+- Pre-commit hooks with Husky
+
+## CI/CD & Automation
+
+This project includes:
+- **GitHub Actions** - Automated CI/CD pipeline for testing, building, and security scanning
+- **Husky** - Git hooks for pre-commit and pre-push validation
+- **Lint-staged** - Automatic linting of staged changes
+
+See [CI-CD-SETUP.md](./CI-CD-SETUP.md) for detailed setup and usage instructions.
 
 ## Testing
 

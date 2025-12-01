@@ -1,6 +1,120 @@
-# services:
-  # backend:
+# =============================================================================
+# Docker Compose - Development Environment
+# =============================================================================
+# Features:
+# - Hot reloading with volume-mounted source code
+# - All services on internal network
+# - Health checks for proper startup ordering
+# - MongoDB with authentication
+# =============================================================================
 
-  # gateway:
+services:
+  # ===========================================================================
+  # Gateway Service - API Entry Point
+  # ===========================================================================
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile.dev
+    container_name: gateway-dev
+    ports:
+      # Only gateway is exposed externally
+      - "${GATEWAY_PORT:-5921}:5921"
+    environment:
+      - NODE_ENV=development
+      - GATEWAY_PORT=5921
+      - BACKEND_URL=http://backend:3847
+    volumes:
+      # Mount source code for hot reloading
+      - ../gateway/src:/app/src:ro
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5921/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
 
-  # mongo:
+  # ===========================================================================
+  # Backend Service - Business Logic
+  # ===========================================================================
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    container_name: backend-dev
+    # Backend port is NOT exposed externally - internal only
+    expose:
+      - "3847"
+    environment:
+      - NODE_ENV=development
+      - BACKEND_PORT=3847
+      - MONGO_URI=mongodb://${MONGO_APP_USERNAME:-app_user}:${MONGO_APP_PASSWORD:-app_password}@mongo:27017/${MONGO_DATABASE:-ecommerce}?authSource=${MONGO_DATABASE:-ecommerce}
+      - MONGO_DATABASE=${MONGO_DATABASE:-ecommerce}
+    volumes:
+      # Mount source code for hot reloading
+      - ../backend/src:/app/src:ro
+      # Mount tsconfig for TypeScript compilation
+      - ../backend/tsconfig.json:/app/tsconfig.json:ro
+    networks:
+      - app-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3847/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # MongoDB Service - Database
+  # ===========================================================================
+  mongo:
+    image: mongo:7
+    container_name: mongo-dev
+    # MongoDB port is NOT exposed externally - internal only
+    expose:
+      - "27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-admin_password}
+      - MONGO_DATABASE=${MONGO_DATABASE:-ecommerce}
+      - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:-app_user}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:-app_password}
+    volumes:
+      # Data persistence
+      - mongo-data-dev:/data/db
+      # MongoDB initialization script
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  app-network:
+    driver: bridge
+    name: ecommerce-network-dev
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  mongo-data-dev:
+    name: ecommerce-mongo-data-dev

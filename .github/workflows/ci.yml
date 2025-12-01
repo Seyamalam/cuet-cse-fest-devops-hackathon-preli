@@ -1,0 +1,198 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  MONGO_INITDB_ROOT_USERNAME: admin
+  MONGO_INITDB_ROOT_PASSWORD: test_password
+  MONGO_APP_USERNAME: app_user
+  MONGO_APP_PASSWORD: app_password
+  MONGO_DATABASE: ecommerce
+  BACKEND_PORT: 3847
+  GATEWAY_PORT: 5921
+  NODE_ENV: test
+
+jobs:
+  # ===========================================================================
+  # Lint and Type Check
+  # ===========================================================================
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            gateway/package-lock.json
+
+      - name: Install backend dependencies
+        run: cd backend && npm ci
+
+      - name: Install gateway dependencies
+        run: cd gateway && npm ci
+
+      - name: Type check backend
+        run: cd backend && npm run type-check
+
+  # ===========================================================================
+  # Build Docker Images
+  # ===========================================================================
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: ecommerce-backend:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build gateway image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./gateway
+          file: ./gateway/Dockerfile
+          push: false
+          tags: ecommerce-gateway:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Integration Tests
+  # ===========================================================================
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          MONGO_INITDB_ROOT_USERNAME=admin
+          MONGO_INITDB_ROOT_PASSWORD=test_password
+          MONGO_APP_USERNAME=app_user
+          MONGO_APP_PASSWORD=app_password
+          MONGO_DATABASE=ecommerce
+          BACKEND_PORT=3847
+          GATEWAY_PORT=5921
+          NODE_ENV=test
+          EOF
+
+      - name: Build and start services
+        run: |
+          docker compose -f docker/compose.production.yaml --env-file .env -p ecommerce-test build
+          docker compose -f docker/compose.production.yaml --env-file .env -p ecommerce-test up -d
+          
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services to be healthy..."
+          timeout 120 bash -c 'until docker compose -f docker/compose.production.yaml -p ecommerce-test ps | grep -q "healthy"; do sleep 5; done'
+          sleep 10
+
+      - name: Test Gateway Health
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5921/health)
+          if [ "$response" != "200" ]; then
+            echo "Gateway health check failed with status $response"
+            exit 1
+          fi
+          echo "✅ Gateway health check passed"
+
+      - name: Test Backend Health via Gateway
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5921/api/health)
+          if [ "$response" != "200" ]; then
+            echo "Backend health check failed with status $response"
+            exit 1
+          fi
+          echo "✅ Backend health check passed"
+
+      - name: Test Create Product
+        run: |
+          response=$(curl -s -X POST http://localhost:5921/api/products \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"CI Test Product","price":99.99}')
+          if ! echo "$response" | grep -q "CI Test Product"; then
+            echo "Create product failed: $response"
+            exit 1
+          fi
+          echo "✅ Create product passed"
+
+      - name: Test Get Products
+        run: |
+          response=$(curl -s http://localhost:5921/api/products)
+          if ! echo "$response" | grep -q "CI Test Product"; then
+            echo "Get products failed: $response"
+            exit 1
+          fi
+          echo "✅ Get products passed"
+
+      - name: Test Backend Not Directly Accessible
+        run: |
+          if curl -s --connect-timeout 5 http://localhost:3847/api/products > /dev/null 2>&1; then
+            echo "❌ Security test failed: Backend is directly accessible!"
+            exit 1
+          fi
+          echo "✅ Security test passed: Backend is properly isolated"
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker/compose.production.yaml -p ecommerce-test logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker/compose.production.yaml -p ecommerce-test down -v
+
+  # ===========================================================================
+  # Security Scan
+  # ===========================================================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner on backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './backend'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # Don't fail on vulnerabilities, just report
+
+      - name: Run Trivy vulnerability scanner on gateway
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './gateway'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
