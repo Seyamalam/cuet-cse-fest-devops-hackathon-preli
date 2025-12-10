@@ -1,0 +1,39 @@
+# =============================================================================
+# Kibana Configuration
+# =============================================================================
+# Critical Infrastructure Log Visualization
+# =============================================================================
+
+# Server settings
+server.name: kibana
+server.host: 0.0.0.0
+server.port: 5601
+
+# Elasticsearch connection
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# Request timeout
+elasticsearch.requestTimeout: 30000
+
+# Security settings (disabled for development)
+xpack.security.enabled: false
+
+# Monitoring
+monitoring.ui.enabled: true
+monitoring.ui.container.elasticsearch.enabled: true
+
+# Telemetry
+telemetry.enabled: false
+
+# Logging
+logging.root.level: warn
+logging.appenders.default.type: console
+logging.appenders.console.type: console
+logging.appenders.console.layout.type: pattern
+logging.appenders.console.layout.pattern: "[%date] [%level] [%logger] %message"
+
+# Map settings
+map.includeElasticMapsService: false
+
+# CSP settings
+csp.strict: true

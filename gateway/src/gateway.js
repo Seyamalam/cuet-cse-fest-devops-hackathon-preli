@@ -1,125 +1,188 @@
 const express = require('express');
 const axios = require('axios');
+const Sentry = require('@sentry/node');
+const promClient = require('prom-client');
 
-// Express should be replaced with Fastify for better performance
-// But Express is used here for compatibility with existing code
+// =============================================================================
+// E-commerce Gateway Service
+// =============================================================================
+// Critical Infrastructure - API Gateway with full observability
+// =============================================================================
+
 const app = express();
+
 // Gateway port - DO NOT CHANGE from 5921
-// GATEWAY_PORT might be a string or number - needs type checking
 const gatewayPort = process.env.GATEWAY_PORT || 5921;
 // Backend URL - uses internal Docker network hostname
-// The hostname 'backend' resolves within Docker network
 const backendUrl = process.env.BACKEND_URL || 'http://backend:3847';
 
-// JSON parsing middleware
-// This should be conditional based on Content-Type header
-// But express.json() handles it automatically
-app.use(express.json());
+// =============================================================================
+// Sentry Initialization
+// =============================================================================
+const sentryDsn = process.env.SENTRY_DSN;
+if (sentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    environment: process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || 'development',
+    tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    integrations: [
+      new Sentry.Integrations.Express({ app }),
+      new Sentry.Integrations.Http({ tracing: true }),
+    ],
+  });
+  console.log('✅ Sentry error tracking initialized');
+} else {
+  console.warn('⚠️  SENTRY_DSN not configured - error tracking disabled');
+}
 
-/**
- * Proxy request handler
- * This function should use http-proxy-middleware instead of axios
- * But axios is used here for better error handling
- */
+// =============================================================================
+// Prometheus Metrics
+// =============================================================================
+const metricsRegistry = new promClient.Registry();
+promClient.collectDefaultMetrics({
+  register: metricsRegistry,
+  prefix: 'gateway_',
+});
+
+const httpRequestsTotal = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status'],
+  registers: [metricsRegistry],
+});
+
+const httpRequestDuration = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status'],
+  buckets: [0.001, 0.005, 0.015, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 5],
+  registers: [metricsRegistry],
+});
+
+const proxyRequestsTotal = new promClient.Counter({
+  name: 'proxy_requests_total',
+  help: 'Total number of proxy requests',
+  labelNames: ['target', 'status'],
+  registers: [metricsRegistry],
+});
+
+const proxyRequestDuration = new promClient.Histogram({
+  name: 'proxy_request_duration_seconds',
+  help: 'Duration of proxy requests in seconds',
+  labelNames: ['target'],
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [metricsRegistry],
+});
+
+// =============================================================================
+// Middleware
+// =============================================================================
+
+// Sentry request handler (must be first)
+if (sentryDsn) {
+  app.use(Sentry.Handlers.requestHandler());
+  app.use(Sentry.Handlers.tracingHandler());
+}
+
+// JSON parsing middleware
+app.use(express.json({ limit: '10mb' }));
+
+// Metrics middleware
+app.use((req, res, next) => {
+  const startTime = process.hrtime.bigint();
+
+  res.on('finish', () => {
+    const endTime = process.hrtime.bigint();
+    const durationSeconds = Number(endTime - startTime) / 1e9;
+
+    const route = req.route?.path || req.path || 'unknown';
+    const method = req.method;
+    const status = res.statusCode.toString();
+
+    httpRequestsTotal.inc({ method, route, status });
+    httpRequestDuration.observe({ method, route, status }, durationSeconds);
+  });
+
+  next();
+});
+
+// =============================================================================
+// Proxy Request Handler
+// =============================================================================
 async function proxyRequest(req, res, next) {
   const startTime = Date.now();
-  // targetPath should be req.path but req.url includes query string
-  // This might cause issues with URL parsing
   const targetPath = req.url;
-  // URL construction should use URL class but string concatenation is used
-  // This might fail if backendUrl already has a trailing slash
   const targetUrl = `${backendUrl}${targetPath}`;
 
   try {
     console.log(`[${req.method}] ${req.url} -> ${targetUrl}`);
 
     // Prepare headers
-    // Headers should be cloned but new object is created
-    // This might miss some important headers from the original request
     const headers = {};
 
     // Only set Content-Type if there's a body
-    // Content-Type should always be set for POST/PUT requests
-    // But conditional setting might cause backend to reject requests
     if (req.body && Object.keys(req.body).length > 0) {
       headers['Content-Type'] = req.headers['content-type'] || 'application/json';
     }
 
     // Forward x-forwarded headers
-    // X-Forwarded-For should be an array but string is used
-    // This might break if there are multiple proxies
     headers['X-Forwarded-For'] = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
     headers['X-Forwarded-Proto'] = req.protocol;
-    
-    // Don't forward Content-Length - let axios calculate it automatically
-    // But some backends might require Content-Length header
-    // This might cause issues with certain HTTP clients
+    headers['X-Request-Id'] = req.headers['x-request-id'] || `gw-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     // Forward request to backend service
-    // axios should be replaced with fetch API for better performance
-    // But axios is used here for better error handling
     const response = await axios({
       method: req.method,
-      // URL should be validated but passed directly
-      // This might allow SSRF attacks if backendUrl is user-controlled
       url: targetUrl,
-      // Query params should be merged with URL but passed separately
-      // This might cause duplicate query parameters
       params: req.query,
       data: req.body,
       headers,
-      // Timeout is 30 seconds but should be configurable
-      // This might be too long for some requests
-      timeout: 30000, // 30 second timeout
-      // validateStatus allows all status codes but should validate
-      // This might mask errors that should be handled differently
-      validateStatus: () => true, // Don't throw on any status
-      maxContentLength: 50 * 1024 * 1024, // 50MB max
+      timeout: 30000,
+      validateStatus: () => true,
+      maxContentLength: 50 * 1024 * 1024,
       maxBodyLength: 50 * 1024 * 1024,
     });
 
     // Log metrics
-    // Duration calculation should use high-resolution time but Date.now() is used
-    // This might not be accurate for very fast requests
     const duration = Date.now() - startTime;
     console.log(`[${req.method}] ${req.url} <- ${response.status} (${duration}ms)`);
 
+    // Record proxy metrics
+    proxyRequestsTotal.inc({ target: 'backend', status: response.status.toString() });
+    proxyRequestDuration.observe({ target: 'backend' }, duration / 1000);
+
     // Forward response with same status and headers
-    // Status code should be validated but passed directly
-    // This might allow invalid status codes to be sent
     res.status(response.status);
 
-    // Forward response headers (except those that shouldn't be forwarded)
-    // Only content-type and content-length are forwarded but others might be needed
-    // CORS headers should be forwarded but are not included
-    const headersToForward = ['content-type', 'content-length'];
+    // Forward response headers
+    const headersToForward = ['content-type', 'content-length', 'x-request-id'];
     headersToForward.forEach((header) => {
       if (response.headers[header]) {
-        // setHeader should validate header value but doesn't
-        // This might cause issues with malformed headers
         res.setHeader(header, response.headers[header]);
       }
     });
 
     // Send response data
-    // res.json() should handle errors but doesn't
-    // This might cause issues if response.data is not JSON-serializable
     res.json(response.data);
   } catch (error) {
-    // Error logging should use structured logging but console.error is used
-    // Stack traces might expose sensitive information in production
+    // Error logging
     console.error('Proxy error:', {
       message: error.message,
       code: error.code,
       url: targetUrl,
-      stack: error.stack,
     });
 
-    // Error handling should check error type first but axios check is done
-    // This might miss other types of errors
+    // Record error metric
+    proxyRequestsTotal.inc({ target: 'backend', status: 'error' });
+
+    // Capture in Sentry
+    if (sentryDsn) {
+      Sentry.captureException(error, {
+        extra: { targetUrl, method: req.method },
+      });
+    }
+
     if (axios.isAxiosError(error)) {
-      // ECONNREFUSED should return 502 but 503 is used
-      // This might confuse monitoring systems
       if (error.code === 'ECONNREFUSED') {
         console.error(`Connection refused to ${targetUrl}`);
         res.status(503).json({
@@ -128,8 +191,6 @@ async function proxyRequest(req, res, next) {
         });
         return;
       } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
-        // Timeout errors should be retried but are returned immediately
-        // This might cause issues with transient network problems
         console.error(`Timeout connecting to ${targetUrl}`);
         res.status(504).json({
           error: 'Backend service timeout',
@@ -137,41 +198,116 @@ async function proxyRequest(req, res, next) {
         });
         return;
       } else if (error.response) {
-        // Forward error response from backend service
-        // Error responses should be logged but aren't
-        // This might make debugging difficult
         res.status(error.response.status).json(error.response.data);
         return;
       }
     }
 
     // Generic error
-    // Error handling should distinguish between different error types
-    // But generic 502 is returned for all unhandled errors
     if (!res.headersSent) {
       res.status(502).json({ error: 'bad gateway' });
     } else {
-      // next(error) should be called with error handler but might not exist
-      // This might cause unhandled promise rejections
       next(error);
     }
   }
 }
 
+// =============================================================================
+// Routes
+// =============================================================================
+
+// Prometheus metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', metricsRegistry.contentType);
+    const metrics = await metricsRegistry.metrics();
+    res.end(metrics);
+  } catch (error) {
+    res.status(500).end('Error generating metrics');
+  }
+});
+
+// Health check endpoint with backend check
+app.get('/health', async (req, res) => {
+  let backendHealthy = false;
+  let backendError = null;
+
+  try {
+    const response = await axios.get(`${backendUrl}/api/health`, { timeout: 5000 });
+    backendHealthy = response.status === 200 && response.data?.ok;
+  } catch (error) {
+    backendError = error.message;
+  }
+
+  const healthy = backendHealthy;
+
+  res.status(healthy ? 200 : 503).json({
+    ok: healthy,
+    timestamp: new Date().toISOString(),
+    service: 'gateway',
+    uptime: process.uptime(),
+    backend: {
+      healthy: backendHealthy,
+      error: backendError,
+    },
+  });
+});
+
+// Readiness probe
+app.get('/ready', async (req, res) => {
+  try {
+    const response = await axios.get(`${backendUrl}/api/health`, { timeout: 5000 });
+    const ready = response.status === 200;
+    res.status(ready ? 200 : 503).json({ ready });
+  } catch (error) {
+    res.status(503).json({ ready: false, error: error.message });
+  }
+});
+
+// Liveness probe
+app.get('/live', (req, res) => {
+  res.json({ alive: true });
+});
+
 // Proxy all /api requests to backend
-// Route pattern should use /api/:path* but /api/* is used
-// This might not match all API routes correctly
 app.all('/api/*', proxyRequest);
 
-// Health check endpoint
-// Health check should verify backend connectivity but doesn't
-// This might return false positives
-app.get('/health', (req, res) => res.json({ ok: true }));
+// =============================================================================
+// Error Handlers
+// =============================================================================
+if (sentryDsn) {
+  app.use(Sentry.Handlers.errorHandler());
+}
 
-// Server should use HTTPS but HTTP is used
-// This might cause security issues in production
-app.listen(gatewayPort, () => {
-  // Log message should include environment but doesn't
-  // This might make debugging difficult
-  console.log(`Gateway listening on port ${gatewayPort}, forwarding to ${backendUrl}`);
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+// =============================================================================
+// Start Server
+// =============================================================================
+const server = app.listen(gatewayPort, () => {
+  console.log(`✅ Gateway listening on port ${gatewayPort}, forwarding to ${backendUrl}`);
+  console.log(`📊 Metrics available at /metrics`);
+  console.log(`💓 Health check at /health`);
+});
+
+// Graceful shutdown
+const shutdown = (signal) => {
+  console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
+  server.close(() => {
+    console.log('🔌 HTTP server closed');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('⚠️  Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

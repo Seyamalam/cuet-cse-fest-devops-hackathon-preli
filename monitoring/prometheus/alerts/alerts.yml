@@ -1,0 +1,156 @@
+# =============================================================================
+# Prometheus Alert Rules
+# =============================================================================
+# Critical Infrastructure Alerting
+# =============================================================================
+
+groups:
+  # Service Health Alerts
+  - name: service_health
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 1 minute."
+
+      - alert: BackendHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="backend"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend high latency detected"
+          description: "Backend 95th percentile latency is above 1 second."
+
+      - alert: GatewayHighErrorRate
+        expr: rate(http_requests_total{job="gateway",status=~"5.."}[5m]) / rate(http_requests_total{job="gateway"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway high error rate"
+          description: "Gateway is returning more than 5% errors."
+
+  # MongoDB Alerts
+  - name: mongodb
+    rules:
+      - alert: MongoDBDown
+        expr: mongodb_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MongoDB is down"
+          description: "MongoDB instance has been down for more than 1 minute."
+
+      - alert: MongoDBHighConnections
+        expr: mongodb_connections{state="current"} > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MongoDB high connection count"
+          description: "MongoDB has more than 500 active connections."
+
+      - alert: MongoDBReplicationLag
+        expr: mongodb_mongod_replset_member_replication_lag > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MongoDB replication lag"
+          description: "MongoDB replication lag is more than 60 seconds."
+
+  # Resource Alerts
+  - name: resources
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 85% on {{ $labels.instance }}."
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 85% on {{ $labels.instance }}."
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 15% on {{ $labels.instance }}."
+
+      - alert: DiskSpaceCritical
+        expr: (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"}) * 100 < 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical disk space"
+          description: "Disk space is below 5% on {{ $labels.instance }}."
+
+  # Container Alerts
+  - name: containers
+    rules:
+      - alert: ContainerKilled
+        expr: time() - container_last_seen > 60
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container killed"
+          description: "Container {{ $labels.name }} was killed."
+
+      - alert: ContainerHighCPU
+        expr: (sum(rate(container_cpu_usage_seconds_total{name!=""}[3m])) BY (instance, name) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container high CPU usage"
+          description: "Container {{ $labels.name }} CPU usage is above 80%."
+
+      - alert: ContainerHighMemory
+        expr: (sum(container_memory_working_set_bytes{name!=""}) BY (instance, name) / sum(container_spec_memory_limit_bytes{name!=""} > 0) BY (instance, name) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container high memory usage"
+          description: "Container {{ $labels.name }} memory usage is above 80%."
+
+  # MinIO Alerts
+  - name: minio
+    rules:
+      - alert: MinIODown
+        expr: minio_cluster_health_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO is down"
+          description: "MinIO cluster is not healthy."
+
+      - alert: MinIODiskOffline
+        expr: minio_cluster_disk_offline_total > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO disk offline"
+          description: "{{ $value }} MinIO disk(s) are offline."

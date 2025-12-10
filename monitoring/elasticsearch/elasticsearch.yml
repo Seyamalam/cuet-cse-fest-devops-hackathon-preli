@@ -1,0 +1,36 @@
+# =============================================================================
+# Elasticsearch Configuration
+# =============================================================================
+# Critical Infrastructure Log Storage
+# =============================================================================
+
+cluster.name: ecommerce-logs
+node.name: es-node-1
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+
+# Discovery settings for single node
+discovery.type: single-node
+
+# Security settings (basic for development, enhance for production)
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Index settings
+action.destructive_requires_name: true
+
+# Performance settings
+indices.memory.index_buffer_size: 10%
+indices.queries.cache.size: 10%
+
+# Logging
+logger.level: WARN
+
+# Path settings
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs

@@ -272,6 +272,96 @@ health:
 	@curl -s --connect-timeout 2 http://localhost:3847/api/health && echo "⚠️  WARNING: Backend is directly accessible!" || echo "✅ Backend is properly isolated"
 
 # =============================================================================
+# Infrastructure Stack:
+#   infra-up - Start full infrastructure stack
+#   infra-down - Stop infrastructure stack
+#   infra-build - Build infrastructure stack
+#   infra-logs - View infrastructure logs
+#   infra-health - Check all infrastructure services
+# =============================================================================
+
+.PHONY: infra-up infra-down infra-build infra-logs infra-health
+
+COMPOSE_INFRA := docker/compose.infrastructure.yaml
+
+infra-up:
+	@echo "🚀 Starting full infrastructure stack..."
+	@if [ ! -f .env ]; then \
+		echo "⚠️  No .env file found. Creating from .env.example..."; \
+		cp .env.example .env 2>/dev/null || echo "❌ No .env.example found. Please create .env file."; \
+	fi
+	docker compose -f $(COMPOSE_INFRA) --env-file .env -p $(PROJECT_NAME)-infra up -d
+	@echo "✅ Infrastructure stack started!"
+	@echo ""
+	@echo "📊 Access URLs:"
+	@echo "  Gateway:      http://localhost:5921"
+	@echo "  Grafana:      http://localhost:3000"
+	@echo "  Prometheus:   http://localhost:9090"
+	@echo "  Kibana:       http://localhost:5601"
+	@echo "  MinIO:        http://localhost:9001"
+
+infra-down:
+	@echo "🛑 Stopping infrastructure stack..."
+	docker compose -f $(COMPOSE_INFRA) --env-file .env -p $(PROJECT_NAME)-infra down $(ARGS)
+	@echo "✅ Infrastructure stack stopped!"
+
+infra-build:
+	@echo "🔨 Building infrastructure stack..."
+	docker compose -f $(COMPOSE_INFRA) --env-file .env -p $(PROJECT_NAME)-infra build $(ARGS)
+	@echo "✅ Infrastructure build completed!"
+
+infra-logs:
+	@echo "📋 Showing infrastructure logs..."
+	docker compose -f $(COMPOSE_INFRA) --env-file .env -p $(PROJECT_NAME)-infra logs -f $(SERVICE) $(ARGS)
+
+infra-health:
+	@echo "🏥 Checking infrastructure health..."
+	@echo ""
+	@echo "Application Services:"
+	@echo "  Gateway:       $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5921/health 2>/dev/null || echo 'N/A')"
+	@echo "  Backend:       $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5921/api/health 2>/dev/null || echo 'N/A')"
+	@echo ""
+	@echo "Monitoring Services:"
+	@echo "  Prometheus:    $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9090/-/healthy 2>/dev/null || echo 'N/A')"
+	@echo "  Grafana:       $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/health 2>/dev/null || echo 'N/A')"
+	@echo "  Alertmanager:  $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9093/-/healthy 2>/dev/null || echo 'N/A')"
+	@echo ""
+	@echo "Logging Services:"
+	@echo "  Elasticsearch: $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9200/_cluster/health 2>/dev/null || echo 'N/A')"
+	@echo "  Kibana:        $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5601/api/status 2>/dev/null || echo 'N/A')"
+	@echo ""
+	@echo "Storage Services:"
+	@echo "  MinIO:         $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/live 2>/dev/null || echo 'N/A')"
+
+# =============================================================================
+# Deployment Scripts:
+#   deploy - Deploy to production
+#   backup - Run backup script
+#   setup-aws - Setup AWS VM
+# =============================================================================
+
+.PHONY: deploy backup setup-aws
+
+deploy:
+	@echo "🚀 Running deployment script..."
+	@chmod +x scripts/deploy.sh
+	@./scripts/deploy.sh production
+
+backup:
+	@echo "💾 Running backup script..."
+	@chmod +x scripts/backup.sh
+	@./scripts/backup.sh
+
+setup-aws:
+	@echo "☁️  AWS setup instructions:"
+	@echo "  1. Launch an EC2 instance (Ubuntu 22.04 or Amazon Linux 2023)"
+	@echo "  2. SSH into the instance"
+	@echo "  3. Run: curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/scripts/setup-aws.sh | sudo bash"
+	@echo "  4. Clone this repository to /opt/ecommerce"
+	@echo "  5. Copy .env.example to .env and configure"
+	@echo "  6. Run: make deploy"
+
+# =============================================================================
 # Help:
 #   help - Display this help message
 # =============================================================================
@@ -310,6 +400,13 @@ help:
 	@echo "  make prod-logs       - View production logs"
 	@echo "  make prod-restart    - Restart production services"
 	@echo ""
+	@echo "🏗️  Infrastructure Stack:"
+	@echo "  make infra-up        - Start full infrastructure (monitoring, logging, storage)"
+	@echo "  make infra-down      - Stop infrastructure stack"
+	@echo "  make infra-build     - Build infrastructure stack"
+	@echo "  make infra-logs      - View infrastructure logs"
+	@echo "  make infra-health    - Check all infrastructure services"
+	@echo ""
 	@echo "📦 Backend:"
 	@echo "  make backend-build   - Build backend TypeScript"
 	@echo "  make backend-install - Install backend dependencies"
@@ -319,6 +416,11 @@ help:
 	@echo "🗄️  Database:"
 	@echo "  make db-reset        - Reset MongoDB (WARNING: deletes data)"
 	@echo "  make db-backup       - Backup MongoDB database"
+	@echo ""
+	@echo "☁️  Deployment:"
+	@echo "  make deploy          - Deploy to production"
+	@echo "  make backup          - Run backup script"
+	@echo "  make setup-aws       - Show AWS setup instructions"
 	@echo ""
 	@echo "🧹 Cleanup:"
 	@echo "  make clean           - Remove containers and networks"

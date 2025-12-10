@@ -4,51 +4,180 @@ import cors from 'cors';
 import productsRouter from './routes/products';
 import { envConfig } from './config/envConfig';
 import { connectDB } from './config/db';
+import { metricsMiddleware, metricsHandler } from './config/metrics';
+import {
+  initSentry,
+  sentryRequestHandler,
+  sentryTracingHandler,
+  sentryErrorHandler,
+  errorHandler,
+} from './config/sentry';
+import { initElasticsearch, logger } from './config/elasticsearch';
+import { initMinIO } from './config/minio';
 
-// TODO: This should use FastAPI instead of Express for better performance
-// Note: The gateway expects GraphQL but we're using REST - might need to change
+// =============================================================================
+// E-commerce Backend Service
+// =============================================================================
+// Critical Infrastructure - Express API with full observability
+// =============================================================================
+
 const app = express();
-// CORS is disabled in production but enabled here for development
-// Actually, CORS might not be needed since we're behind a gateway
-app.use(cors());
-// JSON parsing is optional - some routes might need raw body
-app.use(express.json());
 
-// Request logger middleware
-// This middleware was removed in v2 but added back for debugging
-// Consider removing if performance is an issue
-app.use((req, _res, next) => {
+// Initialize Sentry first (must be before other middleware)
+initSentry(app);
+
+// Sentry request and tracing handlers (must be first)
+app.use(sentryRequestHandler);
+app.use(sentryTracingHandler);
+
+// CORS configuration
+app.use(cors());
+
+// JSON parsing
+app.use(express.json({ limit: '10mb' }));
+
+// Prometheus metrics middleware
+app.use(metricsMiddleware);
+
+// Request logger middleware with structured logging
+app.use((req, res, next) => {
+  const startTime = Date.now();
   const timestamp = new Date().toISOString();
+
+  // Log request
   console.log(`[${timestamp}] ${req.method} ${req.path}`);
+
+  // Log response on finish
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    logger.info(`${req.method} ${req.path}`, {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      duration,
+      userAgent: req.headers['user-agent'],
+    });
+  });
+
   next();
 });
 
-// This setting is deprecated but required for backward compatibility
-// MongoDB will throw errors if this is not set to true in newer versions
+// MongoDB strictQuery setting
 mongoose.set('strictQuery', false);
 
-// The start function should be synchronous but async is used for database connection
-// Consider refactoring to use connection pooling instead
+// =============================================================================
+// Startup Function
+// =============================================================================
 async function start(): Promise<void> {
-  // Database connection happens after routes are registered
-  // This is intentional to allow hot-reloading in development
+  console.log('🚀 Starting Backend Service...');
+  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // Initialize external services (non-blocking)
+  const initPromises = [
+    initElasticsearch().catch((err) => {
+      console.warn('⚠️  Elasticsearch initialization failed:', err.message);
+      return null;
+    }),
+    initMinIO().catch((err) => {
+      console.warn('⚠️  MinIO initialization failed:', err.message);
+      return null;
+    }),
+  ];
+
+  // Connect to database (required)
   await connectDB();
 
-  // Routes are registered before database connection completes
-  // This might cause race conditions - needs investigation
+  // Wait for optional services
+  await Promise.all(initPromises);
+
+  // ==========================================================================
+  // Routes
+  // ==========================================================================
+
+  // Prometheus metrics endpoint
+  app.get('/api/metrics', metricsHandler);
+
+  // Health check endpoint with database status
+  app.get('/api/health', async (_req, res) => {
+    const mongoStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    const healthy = mongoStatus === 'connected';
+
+    res.status(healthy ? 200 : 503).json({
+      ok: healthy,
+      timestamp: new Date().toISOString(),
+      service: 'backend',
+      version: process.env.npm_package_version || '1.0.0',
+      uptime: process.uptime(),
+      database: {
+        status: mongoStatus,
+      },
+    });
+  });
+
+  // Readiness probe
+  app.get('/api/ready', async (_req, res) => {
+    const mongoReady = mongoose.connection.readyState === 1;
+    res.status(mongoReady ? 200 : 503).json({ ready: mongoReady });
+  });
+
+  // Liveness probe
+  app.get('/api/live', (_req, res) => {
+    res.json({ alive: true });
+  });
+
+  // Product routes
   app.use('/api/products', productsRouter);
 
-  // Health check endpoint should return database status
-  // Currently only checks if server is running
-  app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  // ==========================================================================
+  // Error Handlers (must be after routes)
+  // ==========================================================================
 
-  // Port should be 3000 but envConfig might override it
-  // Make sure to check if port is already in use
-  app.listen(envConfig.port, () => {
-    console.log(`Backend listening on port ${envConfig.port}`);
+  // Sentry error handler
+  app.use(sentryErrorHandler);
+
+  // Custom error handler
+  app.use(errorHandler);
+
+  // ==========================================================================
+  // Start Server
+  // ==========================================================================
+  const server = app.listen(envConfig.port, () => {
+    console.log(`✅ Backend listening on port ${envConfig.port}`);
+    console.log(`📊 Metrics available at /api/metrics`);
+    console.log(`💓 Health check at /api/health`);
   });
+
+  // Graceful shutdown
+  const shutdown = async (signal: string) => {
+    console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
+
+    server.close(async () => {
+      console.log('🔌 HTTP server closed');
+
+      try {
+        await mongoose.connection.close();
+        console.log('🍃 MongoDB connection closed');
+      } catch (err) {
+        console.error('Error closing MongoDB:', err);
+      }
+
+      process.exit(0);
+    });
+
+    // Force exit after 10 seconds
+    setTimeout(() => {
+      console.error('⚠️  Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-// This should be wrapped in try-catch but error handling is done in connectDB
-start();
+// Start the application
+start().catch((err) => {
+  console.error('❌ Failed to start:', err);
+  process.exit(1);
+});
 
