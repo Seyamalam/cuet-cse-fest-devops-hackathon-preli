@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import productsRouter from './routes/products';
+import filesRouter from './routes/files';
 import { envConfig } from './config/envConfig';
 import { connectDB } from './config/db';
 import { metricsMiddleware, metricsHandler } from './config/metrics';
@@ -127,6 +128,9 @@ async function start(): Promise<void> {
 
   // Product routes
   app.use('/api/products', productsRouter);
+
+  // File storage routes (S3/MinIO)
+  app.use('/api/files', filesRouter);
 
   // ==========================================================================
   // Error Handlers (must be after routes)
