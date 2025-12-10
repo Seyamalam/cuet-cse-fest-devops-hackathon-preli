@@ -8,7 +8,13 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "@sentry/node": "^7.91.0",
+    "@sentry/tracing": "^7.91.0",
+    "prom-client": "^15.0.0",
+    "winston": "^3.11.0",
+    "winston-elasticsearch": "^0.17.4",
+    "express-prometheus-middleware": "^1.2.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
