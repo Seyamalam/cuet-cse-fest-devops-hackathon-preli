@@ -10,6 +10,12 @@
 # - Security hardening (no-new-privileges, read-only where applicable)
 # - Health checks for proper startup ordering
 # - Restart policies for reliability
+# - Prometheus for metrics collection
+# - Grafana for visualization
+# - Elasticsearch for log aggregation
+# - Kibana for log visualization
+# - Sentry for error tracking
+# - MinIO for S3-compatible object storage
 # =============================================================================
 
 services:
@@ -28,11 +34,16 @@ services:
       - NODE_ENV=production
       - GATEWAY_PORT=5921
       - BACKEND_URL=http://backend:3847
+      - SENTRY_DSN=${SENTRY_DSN_GATEWAY:-}
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - LOG_LEVEL=info
     networks:
       - frontend-network
       - backend-network
     depends_on:
       backend:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5921/health"]
@@ -41,10 +52,8 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    # Security: prevent privilege escalation
     security_opt:
       - no-new-privileges:true
-    # Resource limits
     deploy:
       resources:
         limits:
@@ -53,7 +62,6 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
-    # Logging configuration
     logging:
       driver: "json-file"
       options:
@@ -68,7 +76,6 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: backend-prod
-    # Backend is NOT exposed externally - internal only
     expose:
       - "3847"
     environment:
@@ -76,11 +83,24 @@ services:
       - BACKEND_PORT=3847
       - MONGO_URI=mongodb://${MONGO_APP_USERNAME:-app_user}:${MONGO_APP_PASSWORD:-app_password}@mongo:27017/${MONGO_DATABASE:-ecommerce}?authSource=${MONGO_DATABASE:-ecommerce}
       - MONGO_DATABASE=${MONGO_DATABASE:-ecommerce}
+      - SENTRY_DSN=${SENTRY_DSN_BACKEND:-}
+      - PROMETHEUS_PORT=9090
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - LOG_LEVEL=info
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_BUCKET=${MINIO_BUCKET:-ecommerce}
     networks:
-      # Backend only on backend network - not accessible from frontend
       - backend-network
     depends_on:
       mongo:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      sentry:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3847/api/health"]
@@ -89,10 +109,8 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
-    # Security: prevent privilege escalation
     security_opt:
       - no-new-privileges:true
-    # Resource limits
     deploy:
       resources:
         limits:
@@ -101,7 +119,6 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    # Logging configuration
     logging:
       driver: "json-file"
       options:
@@ -114,7 +131,6 @@ services:
   mongo:
     image: mongo:7
     container_name: mongo-prod
-    # MongoDB is NOT exposed externally - internal only
     expose:
       - "27017"
     environment:
@@ -124,12 +140,9 @@ services:
       - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:-app_user}
       - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:-app_password}
     volumes:
-      # Data persistence with named volume
       - mongo-data-prod:/data/db
-      # MongoDB initialization script
       - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     networks:
-      # MongoDB only on backend network - completely isolated
       - backend-network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
@@ -138,10 +151,8 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
-    # Security: prevent privilege escalation
     security_opt:
       - no-new-privileges:true
-    # Resource limits
     deploy:
       resources:
         limits:
@@ -150,19 +161,409 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-    # Logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "5"
 
+  # ===========================================================================
+  # Prometheus - Metrics Collection
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-prod
+    expose:
+      - "9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data-prod:/prometheus
+    environment:
+      - TZ=UTC
+    networks:
+      - backend-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Grafana - Metrics Visualization
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-prod
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - TZ=UTC
+    volumes:
+      - grafana-storage-prod:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - backend-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Elasticsearch - Log Aggregation
+  # ===========================================================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch-prod
+    expose:
+      - "9200"
+      - "9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - TZ=UTC
+    volumes:
+      - elasticsearch-data-prod:/usr/share/elasticsearch/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ===========================================================================
+  # Kibana - Log Visualization
+  # ===========================================================================
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana-prod
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=
+      - TZ=UTC
+    volumes:
+      - kibana-data-prod:/usr/share/kibana/data
+    networks:
+      - backend-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Sentry - Error Tracking & Monitoring
+  # ===========================================================================
+  sentry-postgres:
+    image: postgres:15
+    container_name: sentry-postgres-prod
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=sentry
+      - POSTGRES_USER=${SENTRY_DB_USER:-sentry}
+      - POSTGRES_PASSWORD=${SENTRY_DB_PASSWORD:-sentry_password}
+    volumes:
+      - sentry-postgres-data-prod:/var/lib/postgresql/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sentry"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  sentry-redis:
+    image: redis:7-alpine
+    container_name: sentry-redis-prod
+    expose:
+      - "6379"
+    volumes:
+      - sentry-redis-data-prod:/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  sentry:
+    image: sentry:latest
+    container_name: sentry-prod
+    ports:
+      - "${SENTRY_PORT:-9000}:9000"
+    environment:
+      - SENTRY_SECRET_KEY=${SENTRY_SECRET_KEY:-your-secret-key-change-this}
+      - SENTRY_POSTGRES_HOST=sentry-postgres
+      - SENTRY_POSTGRES_PORT=5432
+      - SENTRY_DB_NAME=sentry
+      - SENTRY_DB_USER=${SENTRY_DB_USER:-sentry}
+      - SENTRY_DB_PASSWORD=${SENTRY_DB_PASSWORD:-sentry_password}
+      - SENTRY_REDIS_HOST=sentry-redis
+      - SENTRY_REDIS_PORT=6379
+      - SENTRY_FILESTORE_DIR=/var/lib/sentry/files
+    volumes:
+      - sentry-files-prod:/var/lib/sentry/files
+    networks:
+      - backend-network
+    depends_on:
+      sentry-postgres:
+        condition: service_healthy
+      sentry-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/_health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: run web
+
+  sentry-worker:
+    image: sentry:latest
+    container_name: sentry-worker-prod
+    environment:
+      - SENTRY_SECRET_KEY=${SENTRY_SECRET_KEY:-your-secret-key-change-this}
+      - SENTRY_POSTGRES_HOST=sentry-postgres
+      - SENTRY_POSTGRES_PORT=5432
+      - SENTRY_DB_NAME=sentry
+      - SENTRY_DB_USER=${SENTRY_DB_USER:-sentry}
+      - SENTRY_DB_PASSWORD=${SENTRY_DB_PASSWORD:-sentry_password}
+      - SENTRY_REDIS_HOST=sentry-redis
+      - SENTRY_REDIS_PORT=6379
+      - SENTRY_FILESTORE_DIR=/var/lib/sentry/files
+    volumes:
+      - sentry-files-prod:/var/lib/sentry/files
+    networks:
+      - backend-network
+    depends_on:
+      sentry:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: run worker -c 4
+
+  # ===========================================================================
+  # MinIO - S3-Compatible Object Storage
+  # ===========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio-prod
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_REGION=us-east-1
+      - MINIO_SERVER_URL=https://minio.example.com:9000
+      - MINIO_BROWSER_REDIRECT_URL=https://minio-console.example.com
+    volumes:
+      - minio-data-prod:/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    command: minio server /data --console-address ":9001"
+
+  # ===========================================================================
+  # MinIO Init Container - Create buckets
+  # ===========================================================================
+  minio-init:
+    image: minio/minio:latest
+    container_name: minio-init-prod
+    networks:
+      - backend-network
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin};
+      /usr/bin/mc mb --ignore-existing myminio/${MINIO_BUCKET:-ecommerce};
+      exit 0
+      "
+    restart: on-failure
+
 # =============================================================================
 # Networks
 # =============================================================================
 # Two-tier network architecture for defense in depth:
 # - frontend-network: Gateway only (connects to external world)
-# - backend-network: Backend + MongoDB (completely isolated)
+# - backend-network: Backend + MongoDB + Infrastructure (completely isolated)
 # =============================================================================
 networks:
   frontend-network:
@@ -171,7 +572,7 @@ networks:
   backend-network:
     driver: bridge
     name: ecommerce-backend-prod
-    internal: true  # No external access - completely isolated
+    internal: true
 
 # =============================================================================
 # Volumes
@@ -179,3 +580,19 @@ networks:
 volumes:
   mongo-data-prod:
     name: ecommerce-mongo-data-prod
+  prometheus-data-prod:
+    name: ecommerce-prometheus-data-prod
+  grafana-storage-prod:
+    name: ecommerce-grafana-storage-prod
+  elasticsearch-data-prod:
+    name: ecommerce-elasticsearch-data-prod
+  kibana-data-prod:
+    name: ecommerce-kibana-data-prod
+  sentry-postgres-data-prod:
+    name: ecommerce-sentry-postgres-data-prod
+  sentry-redis-data-prod:
+    name: ecommerce-sentry-redis-data-prod
+  sentry-files-prod:
+    name: ecommerce-sentry-files-prod
+  minio-data-prod:
+    name: ecommerce-minio-data-prod

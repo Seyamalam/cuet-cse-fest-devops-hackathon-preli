@@ -1,0 +1,115 @@
+# =============================================================================
+# Prometheus Configuration
+# =============================================================================
+# Metrics collection from application services and infrastructure components
+# =============================================================================
+
+global:
+  scrape_interval: 15s          # Default scrape interval
+  evaluation_interval: 15s       # Default evaluation interval
+  external_labels:
+    monitor: 'ecommerce-monitor'
+    environment: '${NODE_ENV:development}'
+
+# =============================================================================
+# Alerting Configuration
+# =============================================================================
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# =============================================================================
+# Scrape Configurations
+# =============================================================================
+scrape_configs:
+  # =========================================================================
+  # Prometheus Self-Monitoring
+  # =========================================================================
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # =========================================================================
+  # Backend Service Metrics
+  # =========================================================================
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:3847']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'backend'
+
+  # =========================================================================
+  # Gateway Service Metrics
+  # =========================================================================
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:5921']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'gateway'
+
+  # =========================================================================
+  # Node Exporter (if running)
+  # =========================================================================
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # =========================================================================
+  # Docker Daemon (if enabled)
+  # =========================================================================
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['localhost:9323']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # =========================================================================
+  # MinIO Metrics
+  # =========================================================================
+  - job_name: 'minio'
+    bearer_token: ''
+    metrics_path: '/minio/v2/metrics/cluster'
+    static_configs:
+      - targets: ['minio:9000']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # =========================================================================
+  # Elasticsearch Metrics (via Exporter if available)
+  # =========================================================================
+  - job_name: 'elasticsearch'
+    static_configs:
+      - targets: ['elasticsearch:9200']
+    metrics_path: '/_prometheus/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+# =============================================================================
+# Remote Write Configuration (Optional for Prometheus Cloud)
+# =============================================================================
+# Uncomment below to send metrics to external Prometheus compatible service
+# remote_write:
+#   - url: 'http://prometheus-cloud:9090/api/v1/write'
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 200
+#       max_samples_per_send: 500
+#       batch_send_wait: 5s
+#       max_retries: 3
+#       min_backoff: 30ms
+#       max_backoff: 100ms

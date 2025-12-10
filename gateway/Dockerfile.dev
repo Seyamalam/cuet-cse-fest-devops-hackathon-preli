@@ -15,9 +15,6 @@ LABEL version="1.0.0-dev"
 # Set NODE_ENV
 ENV NODE_ENV=development
 
-# Install useful development tools
-RUN apk add --no-cache curl
-
 # Set working directory
 WORKDIR /app
 
