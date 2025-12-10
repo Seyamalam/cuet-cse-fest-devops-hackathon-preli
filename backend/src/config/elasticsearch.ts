@@ -84,7 +84,7 @@ const createLogIndexTemplate = async (): Promise<void> => {
     console.log('✅ Elasticsearch log index template created');
   } catch (error) {
     // Template might already exist
-    console.warn('ℹ️  Could not create index template:', (error as Error).message);
+    console.warn('⚠️  Could not create index template:', (error as Error).message);
   }
 };
 

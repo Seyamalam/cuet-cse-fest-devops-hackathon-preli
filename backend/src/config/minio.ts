@@ -10,8 +10,8 @@ const minioConfig = {
   endPoint: process.env.MINIO_ENDPOINT || 'minio',
   port: parseInt(process.env.MINIO_PORT || '9000', 10),
   useSSL: process.env.MINIO_USE_SSL === 'true',
-  accessKey: process.env.MINIO_ACCESS_KEY || 'minio_admin',
-  secretKey: process.env.MINIO_SECRET_KEY || 'minio_password',
+  accessKey: process.env.MINIO_ACCESS_KEY || '',
+  secretKey: process.env.MINIO_SECRET_KEY || '',
 };
 
 let minioClient: Client | null = null;
@@ -20,8 +20,8 @@ let minioClient: Client | null = null;
  * Initialize MinIO client
  */
 export const initMinIO = async (): Promise<Client | null> => {
-  if (!process.env.MINIO_ENDPOINT && process.env.NODE_ENV !== 'production') {
-    console.warn('⚠️  MinIO not configured - object storage disabled');
+  if (!process.env.MINIO_ACCESS_KEY || !process.env.MINIO_SECRET_KEY) {
+    console.warn('⚠️  MinIO credentials not configured - object storage disabled');
     return null;
   }
 

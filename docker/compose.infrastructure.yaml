@@ -510,6 +510,9 @@ services:
         max-file: "2"
 
   # cAdvisor - Container Metrics
+  # NOTE: cAdvisor requires privileged access or specific capabilities to read
+  # container metrics from the host. For production, consider using specific
+  # capabilities (SYS_PTRACE, DAC_READ_SEARCH) instead of full privileged mode.
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.47.2
     container_name: cadvisor
@@ -524,6 +527,9 @@ services:
     networks:
       - monitoring-network
     restart: unless-stopped
+    # Using privileged mode for full container metrics access
+    # In production, consider running cAdvisor as a DaemonSet in Kubernetes
+    # or using Prometheus container metrics exporters instead
     privileged: true
     deploy:
       resources:

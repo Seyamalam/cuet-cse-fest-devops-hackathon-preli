@@ -6,14 +6,14 @@
 
 global:
   # SMTP configuration for email alerts
-  smtp_smarthost: '${SMTP_HOST:-localhost:587}'
-  smtp_from: '${SMTP_FROM:-alertmanager@example.com}'
-  smtp_auth_username: '${SMTP_USERNAME:-}'
-  smtp_auth_password: '${SMTP_PASSWORD:-}'
+  # NOTE: For production, use Docker secrets or a secrets management tool
+  # Environment variable substitution requires envsubst or a config preprocessor
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alertmanager@example.com'
   smtp_require_tls: true
 
-  # Slack webhook URL
-  slack_api_url: '${SLACK_WEBHOOK_URL:-}'
+  # Slack webhook URL - configure in environment
+  # slack_api_url: 'YOUR_SLACK_WEBHOOK_URL'
 
   # Resolve timeout
   resolve_timeout: 5m
@@ -66,31 +66,24 @@ inhibit_rules:
 # Receivers configuration
 receivers:
   - name: 'default-receiver'
-    # Configure based on environment variables
+    # Configure webhook for alerts
+    # In production, configure proper receivers (email, Slack, PagerDuty)
     webhook_configs:
-      - url: '${ALERT_WEBHOOK_URL:-http://localhost:9999/webhook}'
+      - url: 'http://localhost:9999/webhook'
         send_resolved: true
 
   - name: 'critical-alerts'
-    # Email for critical alerts
-    email_configs:
-      - to: '${ALERT_EMAIL:-admin@example.com}'
-        send_resolved: true
-        headers:
-          Subject: '[CRITICAL] {{ .GroupLabels.alertname }} - E-commerce Platform'
-    # Slack for critical alerts
-    slack_configs:
-      - channel: '#critical-alerts'
-        send_resolved: true
-        title: '{{ .Status | toUpper }}: {{ .GroupLabels.alertname }}'
-        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
-        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+    # Email for critical alerts - configure SMTP settings above
+    # email_configs:
+    #   - to: 'admin@example.com'
+    #     send_resolved: true
+    # Slack for critical alerts - set slack_api_url in global section
+    # slack_configs:
+    #   - channel: '#critical-alerts'
+    #     send_resolved: true
 
   - name: 'warning-alerts'
     # Slack for warning alerts
-    slack_configs:
-      - channel: '#monitoring-alerts'
-        send_resolved: true
-        title: '{{ .Status | toUpper }}: {{ .GroupLabels.alertname }}'
-        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
-        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+    # slack_configs:
+    #   - channel: '#monitoring-alerts'
+    #     send_resolved: true

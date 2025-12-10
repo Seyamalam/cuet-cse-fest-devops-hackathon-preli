@@ -14,9 +14,15 @@ http.port: 9200
 # Discovery settings for single node
 discovery.type: single-node
 
-# Security settings (basic for development, enhance for production)
+# Security settings (enable in production with proper authentication)
+# For production, set xpack.security.enabled: true and configure:
+# - Users and roles
+# - SSL/TLS certificates
+# - Authentication mechanisms
 xpack.security.enabled: false
 xpack.security.enrollment.enabled: false
+# NOTE: For production deployments, enable security and use Docker secrets
+# for credentials management
 
 # Memory settings
 bootstrap.memory_lock: true

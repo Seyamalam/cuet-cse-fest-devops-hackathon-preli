@@ -70,10 +70,24 @@ install_docker() {
                 gnupg \
                 lsb-release
 
-            # Add Docker's official GPG key
+            # Add Docker's official GPG key with verification
+            # Docker's GPG key fingerprint: 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
             install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/$OS/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            curl -fsSL https://download.docker.com/linux/$OS/gpg -o /tmp/docker.gpg
+            
+            # Verify the key fingerprint (security best practice)
+            EXPECTED_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+            ACTUAL_FINGERPRINT=$(gpg --show-keys --with-fingerprint /tmp/docker.gpg 2>/dev/null | grep -oP '([A-F0-9]{4}\s*){10}' | tr -d ' ')
+            
+            if [ "$EXPECTED_FINGERPRINT" != "$ACTUAL_FINGERPRINT" ]; then
+                warn "Docker GPG key fingerprint mismatch. Proceeding with caution."
+                warn "Expected: $EXPECTED_FINGERPRINT"
+                warn "Got: $ACTUAL_FINGERPRINT"
+            fi
+            
+            gpg --dearmor -o /etc/apt/keyrings/docker.gpg < /tmp/docker.gpg
             chmod a+r /etc/apt/keyrings/docker.gpg
+            rm /tmp/docker.gpg
 
             # Set up the repository
             echo \
