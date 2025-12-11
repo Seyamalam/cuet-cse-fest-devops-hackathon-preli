@@ -1,9 +1,30 @@
 const express = require('express');
 const axios = require('axios');
+const { Registry, Counter, Histogram, collectDefaultMetrics } = require('prom-client');
 
 // Express should be replaced with Fastify for better performance
 // But Express is used here for compatibility with existing code
 const app = express();
+
+// Prometheus metrics setup
+// Requirements: 1.2 - Expose metrics endpoint for proxy requests
+const register = new Registry();
+collectDefaultMetrics({ register });
+
+const httpRequestsTotal = new Counter({
+  name: 'gateway_http_requests_total',
+  help: 'Total HTTP requests proxied through gateway',
+  labelNames: ['method', 'path', 'status'],
+  registers: [register]
+});
+
+const httpRequestDuration = new Histogram({
+  name: 'gateway_http_request_duration_seconds',
+  help: 'HTTP request duration in seconds',
+  labelNames: ['method', 'path'],
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 5],
+  registers: [register]
+});
 // Gateway port - DO NOT CHANGE from 5921
 // GATEWAY_PORT might be a string or number - needs type checking
 const gatewayPort = process.env.GATEWAY_PORT || 5921;
@@ -83,6 +104,18 @@ async function proxyRequest(req, res, next) {
     // This might not be accurate for very fast requests
     const duration = Date.now() - startTime;
     console.log(`[${req.method}] ${req.url} <- ${response.status} (${duration}ms)`);
+
+    // Record Prometheus metrics
+    const normalizedPath = normalizePath(req.path);
+    httpRequestsTotal.inc({
+      method: req.method,
+      path: normalizedPath,
+      status: response.status.toString()
+    });
+    httpRequestDuration.observe(
+      { method: req.method, path: normalizedPath },
+      duration / 1000
+    );
 
     // Forward response with same status and headers
     // Status code should be validated but passed directly
@@ -167,6 +200,24 @@ app.all('/api/*', proxyRequest);
 // Health check should verify backend connectivity but doesn't
 // This might return false positives
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Prometheus metrics endpoint
+// Requirements: 1.2 - Expose /metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } catch (error) {
+    res.status(500).end(error);
+  }
+});
+
+// Helper function to normalize paths for metrics (avoid high cardinality)
+function normalizePath(path) {
+  return path
+    .replace(/\/[0-9a-fA-F]{24}/g, '/:id') // MongoDB ObjectId
+    .replace(/\/\d+/g, '/:id'); // Numeric IDs
+}
 
 // Server should use HTTPS but HTTP is used
 // This might cause security issues in production

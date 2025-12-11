@@ -1,0 +1,38 @@
+# Infrastructure Docker Compose
+# Requirements: 1.4, 9.1, 9.5
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ../infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - monitoring-network
+      - app-network
+    restart: unless-stopped
+
+networks:
+  monitoring-network:
+    driver: bridge
+  app-network:
+    external: true
+    name: docker_app-network
+
+volumes:
+  prometheus-data:
+    name: prometheus-data

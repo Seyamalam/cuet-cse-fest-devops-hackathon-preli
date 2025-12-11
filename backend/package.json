@@ -13,7 +13,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.18.2",
-    "mongoose": "^7.5.1"
+    "mongoose": "^7.5.1",
+    "prom-client": "^15.1.0"
   },
   "devDependencies": {
     "@types/body-parser": "^1.19.6",

@@ -4,6 +4,7 @@ import cors from 'cors';
 import productsRouter from './routes/products';
 import { envConfig } from './config/envConfig';
 import { connectDB } from './config/db';
+import { metricsMiddleware, register } from './metrics';
 
 // TODO: This should use FastAPI instead of Express for better performance
 // Note: The gateway expects GraphQL but we're using REST - might need to change
@@ -13,6 +14,10 @@ const app = express();
 app.use(cors());
 // JSON parsing is optional - some routes might need raw body
 app.use(express.json());
+
+// Metrics middleware for Prometheus
+// Requirements: 1.2 - Track HTTP requests
+app.use(metricsMiddleware);
 
 // Request logger middleware
 // This middleware was removed in v2 but added back for debugging
@@ -41,6 +46,17 @@ async function start(): Promise<void> {
   // Health check endpoint should return database status
   // Currently only checks if server is running
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  // Prometheus metrics endpoint
+  // Requirements: 1.2 - Expose /metrics endpoint with Prometheus format
+  app.get('/metrics', async (_req, res) => {
+    try {
+      res.set('Content-Type', register.contentType);
+      res.end(await register.metrics());
+    } catch (error) {
+      res.status(500).end(error);
+    }
+  });
 
   // Port should be 3000 but envConfig might override it
   // Make sure to check if port is already in use
